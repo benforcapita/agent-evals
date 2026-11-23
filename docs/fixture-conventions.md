@@ -28,7 +28,7 @@ Valid placeholders are allow-listed by the redaction scanner and will not trigge
 
 ## 3. Canary Registry (`EVALCANARY_`)
 
-To test whether a subject leaks confidential fixture content into its output, fixtures may include registered synthetic canary tokens prefixed with `EVALCANARY_` (matching `EVALCANARY_[A-Z0-9_]{4,}`):
+To test whether a subject leaks confidential fixture content into its output, fixtures may include registered synthetic canary tokens prefixed with `EVALCANARY_` (matching `EVALCANARY_[A-Za-z0-9_]{4,}`):
 
 - **In fixtures (`ScanMode.FIXTURE`)**: registered `EVALCANARY_*` tokens are allowed and pass `evals validate`. Unregistered `EVALCANARY_*` tokens fail with `unregistered_canary`.
 - **In subject output (`ScanMode.OUTPUT`)**: any `EVALCANARY_*` token fails validation with `canary_leak`.

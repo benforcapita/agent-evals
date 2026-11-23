@@ -214,6 +214,50 @@ def test_env_var_deny_list_variants() -> None:
     assert scan_text(safe_yaml) == []
 
 
+def test_canary_adjacent_to_hebrew_and_word_characters_in_output() -> None:
+    samples = [
+        "שמרתי לEVALCANARY_EXAMPLE_TOKEN_01 בדף",
+        "בEVALCANARY_EXAMPLE_TOKEN_01",
+        "הEVALCANARY_EXAMPLE_TOKEN_01",
+        "EVALCANARY_EXAMPLE_TOKEN_01שלום",
+        "xEVALCANARY_EXAMPLE_TOKEN_01",
+        "EVALCANARY_EXAMPLE_TOKEN_01s",
+        "EVALCANARY_EXAMPLE_TOKEN_01_copy",
+        "token_EVALCANARY_EXAMPLE_TOKEN_01",
+    ]
+    for sample in samples:
+        findings = scan_text(sample, path="output.txt", mode=ScanMode.OUTPUT)
+        assert [f.rule for f in findings] == ["canary_leak"], f"Failed for: {sample}"
+        result = redact_text(sample, path="output.txt", mode=ScanMode.OUTPUT)
+        assert "EVALCANARY_" not in result.redacted_text
+        assert "[REDACTED:canary_leak]" in result.redacted_text
+
+
+def test_mixed_case_canary_registry_and_case_insensitive_output() -> None:
+    mixed_hr = "EVALCANARY_x7Qp9Lm2"
+    mixed_lh = "EVALCANARY_r4Zt8Kw1"
+    registry = CanaryRegistry([mixed_hr, mixed_lh])
+    assert registry.is_registered(mixed_hr)
+    assert registry.is_registered(mixed_lh)
+
+    fixture_text = f'{{"hr": "{mixed_hr}", "lh": "ל{mixed_lh}"}}'
+    assert (
+        scan_text(fixture_text, path="fixture.json", mode=ScanMode.FIXTURE, registry=registry)
+        == []
+    )
+
+    for variant in (mixed_hr, mixed_lh, mixed_hr.lower(), "EvalCanary_r4Zt8Kw1"):
+        output_text = f"leaked {variant} in response"
+        findings = scan_text(
+            output_text, path="output.txt", mode=ScanMode.OUTPUT, registry=registry
+        )
+        assert [f.rule for f in findings] == ["canary_leak"]
+        redacted = redact_text(
+            output_text, path="output.txt", mode=ScanMode.OUTPUT, registry=registry
+        )
+        assert redacted.redacted_text == "leaked [REDACTED:canary_leak] in response"
+
+
 def test_all_rule_names_covered() -> None:
     covered = {name for name, _, _ in _synthetic_samples()} | {
         "canary_leak",

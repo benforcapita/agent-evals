@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from evals.redaction.canaries import CANARY_PATTERN, CanaryRegistry
-from evals.redaction.scanner import RedactionFinding, ScanMode, scan_file, scan_path
+from evals.redaction.scanner import RedactionFinding, ScanMode, redact_text, scan_file, scan_path
 
 VALID_HUMAN_SIGNOFF = frozenset({"never", "conditional", "always"})
 VALID_JUDGE_TYPES = frozenset({"static", "model", "human"})
@@ -74,6 +74,21 @@ class ValidationReport:
             "schema_errors": [issue.to_dict() for issue in self.schema_errors],
             "redaction_findings": [finding.to_dict() for finding in self.redaction_findings],
         }
+
+
+def _sanitize_issues(
+    issues: list[ValidationIssue], registry: CanaryRegistry
+) -> tuple[ValidationIssue, ...]:
+    """Redact any secret or canary value from validation issue messages."""
+    sanitized: list[ValidationIssue] = []
+    for issue in issues:
+        safe_message = redact_text(
+            issue.message, mode=ScanMode.OUTPUT, registry=registry
+        ).redacted_text
+        sanitized.append(
+            ValidationIssue(kind=issue.kind, path=issue.path, message=safe_message)
+        )
+    return tuple(sanitized)
 
 
 def _display_path(path: Path, root: Path | None) -> str:
@@ -194,7 +209,7 @@ def _validate_structured_syntax(
     display = _display_path(path, root)
     try:
         _load_structured_file(path)
-    except (json.JSONDecodeError, yaml.YAMLError, OSError) as exc:
+    except (json.JSONDecodeError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
         errors.append(
             ValidationIssue("fixture", display, f"Failed to parse {suffix} file: {exc}")
         )
@@ -244,7 +259,7 @@ def validate_suite(
         checked.append(display)
         try:
             suite_data = _load_structured_file(suite_file)
-        except (json.JSONDecodeError, yaml.YAMLError, OSError) as exc:
+        except (json.JSONDecodeError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
             errors.append(ValidationIssue("schema", display, f"Invalid suite manifest: {exc}"))
             suite_data = None
 
@@ -312,7 +327,7 @@ def validate_suite(
                                     "schema",
                                     display,
                                     "Invalid canary entry in 'canary_registry' "
-                                    "(must match EVALCANARY_[A-Z0-9_]{4,})",
+                                    "(must match EVALCANARY_[A-Za-z0-9_]{4,})",
                                 )
                             )
                         else:
@@ -330,7 +345,7 @@ def validate_suite(
         checked.append(display)
         try:
             raw = _load_structured_file(cfile)
-        except (json.JSONDecodeError, yaml.YAMLError, OSError) as exc:
+        except (json.JSONDecodeError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
             errors.append(ValidationIssue("schema", display, f"Invalid criteria file: {exc}"))
             continue
         if isinstance(raw, dict) and "criteria" in raw and isinstance(raw["criteria"], list):
@@ -369,7 +384,7 @@ def validate_suite(
         checked.append(display)
         try:
             raw = _load_structured_file(case_file)
-        except (json.JSONDecodeError, yaml.YAMLError, OSError) as exc:
+        except (json.JSONDecodeError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
             errors.append(ValidationIssue("schema", display, f"Invalid cases file: {exc}"))
             continue
 
@@ -569,7 +584,7 @@ def validate_suite(
 
     return ValidationReport(
         target=f"suite:{slug}",
-        schema_errors=tuple(errors),
+        schema_errors=_sanitize_issues(errors, registry),
         redaction_findings=tuple(findings),
         checked_files=tuple(dict.fromkeys(checked)),
     )
@@ -605,7 +620,7 @@ def validate_fixture(
     findings = scan_path(target, mode=ScanMode.FIXTURE, registry=registry, root=root)
     return ValidationReport(
         target=f"fixture:{_display_path(target, root)}",
-        schema_errors=tuple(errors),
+        schema_errors=_sanitize_issues(errors, registry),
         redaction_findings=tuple(findings),
         checked_files=tuple(checked),
     )

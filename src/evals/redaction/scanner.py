@@ -135,7 +135,7 @@ def _collect_matches(
         matched_spans.append(span)
 
     # 1. Canary tokens (EVALCANARY_*).
-    for token, start, end in find_canaries(text):
+    for token, start, end in find_canaries(text, case_insensitive=(mode is ScanMode.OUTPUT)):
         span = (start, end)
         if _overlaps(span, ignored_spans):
             continue

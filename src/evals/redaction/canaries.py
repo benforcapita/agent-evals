@@ -16,7 +16,8 @@ from pathlib import Path
 import yaml
 
 CANARY_PREFIX = "EVALCANARY_"
-CANARY_PATTERN = re.compile(r"\bEVALCANARY_[A-Z0-9_]{4,}\b")
+CANARY_PATTERN = re.compile(r"EVALCANARY_[A-Za-z0-9_]{4,}")
+CANARY_OUTPUT_PATTERN = re.compile(r"EVALCANARY_[A-Za-z0-9_]{4,}", re.IGNORECASE)
 
 DEFAULT_CANARIES: frozenset[str] = frozenset(
     {
@@ -83,6 +84,7 @@ def _extract_canary_list(data: object) -> list[str]:
     raise ValueError("Canary registry file must be a list of strings or {'canaries': [...]}")
 
 
-def find_canaries(text: str) -> list[tuple[str, int, int]]:
+def find_canaries(text: str, *, case_insensitive: bool = False) -> list[tuple[str, int, int]]:
     """Return (token, start, end) for every EVALCANARY_* match in text."""
-    return [(m.group(0), m.start(), m.end()) for m in CANARY_PATTERN.finditer(text)]
+    pattern = CANARY_OUTPUT_PATTERN if case_insensitive else CANARY_PATTERN
+    return [(m.group(0), m.start(), m.end()) for m in pattern.finditer(text)]

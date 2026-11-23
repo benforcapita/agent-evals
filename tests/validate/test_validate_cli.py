@@ -185,3 +185,83 @@ def test_notion_thin_hook_when_script_absent_and_present(
     rc_present = main(["notion", "check-schema", "--root", str(tmp_path)])
     assert rc_present == 0
     assert "stub-ok" in capfd.readouterr().out
+
+
+def test_validate_output_hebrew_prefixed_canary_fails_and_redacts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sample = tmp_path / "hebrew-out.txt"
+    sample.write_text("שמרתי לEVALCANARY_EXAMPLE_TOKEN_01 בדף\n", encoding="utf-8")
+
+    rc_val = main(["validate", "--output", str(sample), "--root", str(tmp_path)])
+    out_val = capsys.readouterr().out
+    assert rc_val == 3
+    assert "canary_leak" in out_val
+    assert "EVALCANARY_EXAMPLE_TOKEN_01" not in out_val
+
+    rc_scan = main(["scan", str(sample), "--mode", "output", "--redact"])
+    out_scan = capsys.readouterr().out
+    assert rc_scan == 3
+    assert out_scan == "שמרתי ל[REDACTED:canary_leak] בדף\n"
+
+
+def test_validate_suite_accepts_mixed_case_canary_registry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_valid_suite(tmp_path, slug="mixed-canary")
+    suite_yaml = tmp_path / "suites" / "mixed-canary" / "suite.yaml"
+    suite_yaml.write_text(
+        suite_yaml.read_text(encoding="utf-8").replace(
+            "EVALCANARY_DEMO_SUITE_01", "EVALCANARY_x7Qp9Lm2"
+        ),
+        encoding="utf-8",
+    )
+    fixture_json = tmp_path / "fixtures" / "mixed-canary" / "sample.json"
+    fixture_json.write_text(
+        fixture_json.read_text(encoding="utf-8").replace(
+            "EVALCANARY_DEMO_SUITE_01", "EVALCANARY_x7Qp9Lm2"
+        ),
+        encoding="utf-8",
+    )
+
+    rc = main(["validate", "--suite", "mixed-canary", "--root", str(tmp_path)])
+    assert rc == 0
+    assert "OK:" in capsys.readouterr().out
+
+
+def test_validate_suite_redacts_secret_value_in_schema_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_valid_suite(tmp_path, slug="leak-id")
+    fake_linear = "lin_api_" + "SyntheticSecretCaseId0123456789"
+    cases_file = tmp_path / "suites" / "leak-id" / "cases.yaml"
+    cases_file.write_text(
+        f"""cases:
+  - id: {fake_linear}
+    title: Case with secret id
+    input: Run validation
+    expected_behavior: Never echo secrets
+    criteria:
+      - UNKNOWN-CRITERION
+""",
+        encoding="utf-8",
+    )
+
+    rc = main(["validate", "--suite", "leak-id", "--root", str(tmp_path)])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert fake_linear not in captured.out
+    assert fake_linear not in captured.err
+    assert "[REDACTED:linear_key]" in captured.out
+
+
+def test_validate_non_utf8_json_fixture_reports_error_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_bytes(b"\xff\xfe{not valid utf8")
+
+    rc = main(["validate", "--fixture", str(bad_json), "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Failed to parse .json file" in out
