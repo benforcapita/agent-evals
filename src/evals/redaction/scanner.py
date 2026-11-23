@@ -149,7 +149,7 @@ def _collect_matches(
 
     matches: list[_InternalMatch] = []
     matched_spans: list[tuple[int, int]] = []
-    canary_leak_spans: list[tuple[int, int]] = []
+    canary_match_spans: list[tuple[int, int]] = []
 
     def add_match(
         rule: str,
@@ -182,7 +182,7 @@ def _collect_matches(
                 end,
                 "Canary token leaked in subject output",
             )
-            canary_leak_spans.append(span)
+            canary_match_spans.append(span)
         elif registry.is_registered(token):
             ignored_spans.append(span)
         else:
@@ -192,6 +192,7 @@ def _collect_matches(
                 end,
                 "Unregistered EVALCANARY_ token in fixture",
             )
+            canary_match_spans.append(span)
 
     # 2. Known key format rules.
     for rule in KNOWN_KEY_RULES:
@@ -201,7 +202,7 @@ def _collect_matches(
                 match.start(),
                 match.end(),
                 rule.description,
-                allow_partial_overlap=bool(canary_leak_spans),
+                allow_partial_overlap=bool(canary_match_spans),
             )
 
     # 3. Deny list of environment variable assignments.
@@ -253,10 +254,11 @@ def _collect_matches(
             or _overlaps(span, url_spans)
         ):
             continue
-        if _overlaps(span, matched_spans):
-            if not _overlaps(span, canary_leak_spans):
+        if _overlaps(span, matched_spans) or _overlaps(span, ignored_spans):
+            if _overlaps(span, matched_spans) and not _overlaps(span, canary_match_spans):
                 continue
-            for r_start, r_end in _subtract_spans(span, canary_leak_spans):
+            subtract_list = canary_match_spans + ignored_spans
+            for r_start, r_end in _subtract_spans(span, subtract_list):
                 rem = text[r_start:r_end]
                 lead = len(rem) - len(rem.lstrip("_-"))
                 stripped_rem = rem.strip("_-")

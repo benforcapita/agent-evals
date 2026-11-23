@@ -62,7 +62,7 @@ KNOWN_KEY_RULES: tuple[PatternRule, ...] = (
     ),
     PatternRule(
         name="slack_token",
-        pattern=re.compile(r"\bxox[a-zA-Z]-[A-Za-z0-9-]{10,}\b"),
+        pattern=re.compile(r"\bxox[a-zA-Z]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9-])"),
         description="Slack token detected",
     ),
     PatternRule(

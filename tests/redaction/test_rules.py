@@ -293,13 +293,68 @@ def test_secret_glued_to_registered_canary_is_never_laundered() -> None:
                 f"Canary leaked in redacted output: {result.redacted_text}"
             )
 
-    # Canary immediately before an OpenAI key must redact both canary and key completely.
+    # Canary immediately before an OpenAI key must redact both canary and key completely
+    # in both output and fixture modes, with exact rule names (kills p05/p09).
     key_after = "sk-proj-AbCdEf1234AbCdEf1234AbCdEf1234"
     glued_after = f"{canary}{key_after}"
-    assert scan_text(glued_after, path="fixture.json", mode=ScanMode.FIXTURE)
-    res_after = redact_text(glued_after, path="output.txt", mode=ScanMode.OUTPUT)
-    assert "AbCdEf1234" not in res_after.redacted_text
-    assert canary not in res_after.redacted_text
+    for mode, expected_canary_rule in (
+        (ScanMode.OUTPUT, "canary_leak"),
+        (ScanMode.FIXTURE, "unregistered_canary"),
+    ):
+        res_after = redact_text(glued_after, path="sample.txt", mode=mode)
+        assert {f.rule for f in res_after.findings} == {expected_canary_rule, "openai_key"}
+        assert "AbCdEf1234" not in res_after.redacted_text
+        assert canary not in res_after.redacted_text
+
+    # Exact rule name on AWS key + underscore + canary (kills p05/p09) and single marker
+    # when a canary is contained inside a Linear key (kills p13).
+    aws_glued = f"AKIA0123456789ABCDEF_{canary}"
+    res_aws = redact_text(aws_glued, path="output.txt", mode=ScanMode.OUTPUT)
+    assert {f.rule for f in res_aws.findings} == {"aws_access_key", "canary_leak"}
+    assert res_aws.redacted_text == "[REDACTED:aws_access_key]_[REDACTED:canary_leak]"
+
+    lin_glued = f"lin_api_FakeLinearKey0123456FakeLinearKey0123456{canary}"
+    res_lin = redact_text(lin_glued, path="output.txt", mode=ScanMode.OUTPUT)
+    assert res_lin.redacted_text == "[REDACTED:linear_key]"
+
+
+def test_slack_token_with_underscore_suffix_or_canary_leaves_no_tail_residue() -> None:
+    slack_tail = "FakeSlackTokenTail012345"
+    slack_tok = f"xoxb-000000000000-000000000000-{slack_tail}"
+    canary = "EVALCANARY_EXAMPLE_TOKEN_01"
+
+    for sample in (
+        f"{slack_tok}_suffix",
+        f"{slack_tok}{canary}",
+        f"{slack_tok}_{canary}",
+        f"{slack_tok}-{canary}",
+    ):
+        for mode in (ScanMode.FIXTURE, ScanMode.OUTPUT):
+            res = redact_text(sample, path="sample.txt", mode=mode)
+            assert any(f.rule == "slack_token" for f in res.findings)
+            assert slack_tail not in res.redacted_text, (
+                f"Slack tail leaked ({mode}): {res.redacted_text}"
+            )
+            assert "xoxb-" not in res.redacted_text
+
+
+def test_registered_high_entropy_canary_after_hebrew_maqaf_and_unicode_ascii_only() -> None:
+    high_entropy_canary = "EVALCANARY_x7Qp9Lm2Ab3Cd4Ef5Gh6"
+    registry = CanaryRegistry([high_entropy_canary])
+
+    for fixture_text in (
+        f"ל-{high_entropy_canary}",
+        f"prefix+{high_entropy_canary}",
+        f"path/{high_entropy_canary}",
+    ):
+        assert (
+            scan_text(fixture_text, path="fixture.json", mode=ScanMode.FIXTURE, registry=registry)
+            == []
+        )
+
+    # Unicode case-folding chars (Kelvin U+212A, long-s U+017F) must not match (kills p01).
+    assert scan_text("EVALCANARY_\u212a1234", path="output.txt", mode=ScanMode.OUTPUT) == []
+    assert scan_text("EVALCANARY_\u017f1234", path="output.txt", mode=ScanMode.OUTPUT) == []
 
 
 def test_all_rule_names_covered() -> None:
