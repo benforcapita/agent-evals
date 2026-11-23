@@ -265,3 +265,56 @@ def test_validate_non_utf8_json_fixture_reports_error_cleanly(
     out = capsys.readouterr().out
     assert rc == 1
     assert "Failed to parse .json file" in out
+
+
+def test_validate_suite_redacts_registered_canary_in_schema_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_valid_suite(tmp_path, slug="canary-id")
+    cases_file = tmp_path / "suites" / "canary-id" / "cases.yaml"
+    cases_file.write_text(
+        """cases:
+  - id: EVALCANARY_DEMO_SUITE_01
+    title: Case with registered canary id
+    input: Run validation
+    expected_behavior: Never echo canaries in schema errors
+    criteria:
+      - UNKNOWN-CRITERION
+""",
+        encoding="utf-8",
+    )
+
+    rc = main(["validate", "--suite", "canary-id", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "EVALCANARY_DEMO_SUITE_01" not in out
+    assert "[REDACTED:canary_leak]" in out
+
+
+@pytest.mark.parametrize("bad_file", ["suite.yaml", "criteria.yaml", "cases.yaml"])
+def test_validate_suite_non_utf8_files_report_error_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], bad_file: str
+) -> None:
+    _write_valid_suite(tmp_path, slug="bad-utf8")
+    sample = tmp_path / "fixtures" / "bad-utf8" / "sample.json"
+    sample.write_text('{"ok": true}\n', encoding="utf-8")
+    (tmp_path / "suites" / "bad-utf8" / bad_file).write_bytes(b"\xff\xfe: invalid")
+
+    rc = main(["validate", "--suite", "bad-utf8", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Invalid " in out
+
+
+def test_validate_fixture_sanitizes_secret_in_error_message(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_linear = "lin_api_" + "SyntheticSecret0123456"
+    malformed = tmp_path / "broken.yaml"
+    malformed.write_text(f"[{fake_linear}\n", encoding="utf-8")
+
+    rc = main(["validate", "--fixture", str(malformed), "--root", str(tmp_path)])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert fake_linear not in captured.out
+    assert "[REDACTED:linear_key]" in captured.out

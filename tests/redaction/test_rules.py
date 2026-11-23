@@ -16,6 +16,7 @@ from evals.redaction import (
     CanaryRegistry,
     ScanMode,
     extract_placeholders,
+    find_canaries,
     is_valid_placeholder,
     redact_text,
     scan_text,
@@ -256,6 +257,49 @@ def test_mixed_case_canary_registry_and_case_insensitive_output() -> None:
             output_text, path="output.txt", mode=ScanMode.OUTPUT, registry=registry
         )
         assert redacted.redacted_text == "leaked [REDACTED:canary_leak] in response"
+
+    # Hebrew-prefixed unregistered canary in fixture mode must still be caught (kills \b mutant).
+    hebrew_unreg = scan_text(
+        "לEVALCANARY_UNREGISTERED_99", path="fixture.json", mode=ScanMode.FIXTURE
+    )
+    assert [f.rule for f in hebrew_unreg] == ["unregistered_canary"]
+
+    # Default find_canaries is case-sensitive, and short (<4 char) suffixes do not match.
+    assert find_canaries("evalcanary_example_01") == []
+    assert scan_text("EVALCANARY_abc", path="output.txt", mode=ScanMode.OUTPUT) == []
+
+
+def test_secret_glued_to_registered_canary_is_never_laundered() -> None:
+    canary = "EVALCANARY_EXAMPLE_TOKEN_01"
+    secrets = [
+        "lin_api_FakeLinearKey0123456FakeLinearKey0123456",
+        "ghp_FakeGitHubToken01234FakeGitHubToken01234",
+        "sk-proj-AbCdEf1234AbCdEf1234AbCdEf1234",
+        "ntn_FakeNotionToken01234567FakeNotionToken01234567",
+        "AKIA0123456789ABCDEF",
+        "aB3dE6gH9jK2mN5pQ8rS1tU4vW7xY0zC+fI/L9xQ2m",
+    ]
+    for secret in secrets:
+        for glued in (f"{secret}{canary}", f"{secret}_{canary}", f"{secret}-{canary}"):
+            fixture_findings = scan_text(glued, path="fixture.json", mode=ScanMode.FIXTURE)
+            assert fixture_findings, f"Fixture laundered secret: {glued}"
+
+            result = redact_text(glued, path="output.txt", mode=ScanMode.OUTPUT)
+            assert result.has_findings, f"Output missed secret+canary: {glued}"
+            assert secret not in result.redacted_text, (
+                f"Secret leaked in redacted output: {result.redacted_text}"
+            )
+            assert canary not in result.redacted_text, (
+                f"Canary leaked in redacted output: {result.redacted_text}"
+            )
+
+    # Canary immediately before an OpenAI key must redact both canary and key completely.
+    key_after = "sk-proj-AbCdEf1234AbCdEf1234AbCdEf1234"
+    glued_after = f"{canary}{key_after}"
+    assert scan_text(glued_after, path="fixture.json", mode=ScanMode.FIXTURE)
+    res_after = redact_text(glued_after, path="output.txt", mode=ScanMode.OUTPUT)
+    assert "AbCdEf1234" not in res_after.redacted_text
+    assert canary not in res_after.redacted_text
 
 
 def test_all_rule_names_covered() -> None:

@@ -607,7 +607,7 @@ def validate_fixture(
         )
         return ValidationReport(
             target=f"fixture:{target}",
-            schema_errors=tuple(errors),
+            schema_errors=_sanitize_issues(errors, registry),
             redaction_findings=(),
             checked_files=(),
         )

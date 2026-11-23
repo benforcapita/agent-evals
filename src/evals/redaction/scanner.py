@@ -97,6 +97,29 @@ def _overlaps(span: tuple[int, int], existing: list[tuple[int, int]]) -> bool:
     return any(start < ex_end and ex_start < end for ex_start, ex_end in existing)
 
 
+def _is_contained_in(span: tuple[int, int], existing: list[tuple[int, int]]) -> bool:
+    start, end = span
+    return any(ex_start <= start and end <= ex_end for ex_start, ex_end in existing)
+
+
+def _subtract_spans(
+    span: tuple[int, int], subtract: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    pieces = [span]
+    for sub_start, sub_end in subtract:
+        next_pieces: list[tuple[int, int]] = []
+        for p_start, p_end in pieces:
+            if sub_end <= p_start or sub_start >= p_end:
+                next_pieces.append((p_start, p_end))
+            else:
+                if p_start < sub_start:
+                    next_pieces.append((p_start, sub_start))
+                if sub_end < p_end:
+                    next_pieces.append((sub_end, p_end))
+        pieces = next_pieces
+    return pieces
+
+
 def _line_starts(text: str) -> list[int]:
     starts = [0]
     idx = text.find("\n")
@@ -126,10 +149,23 @@ def _collect_matches(
 
     matches: list[_InternalMatch] = []
     matched_spans: list[tuple[int, int]] = []
+    canary_leak_spans: list[tuple[int, int]] = []
 
-    def add_match(rule: str, start: int, end: int, message: str) -> None:
+    def add_match(
+        rule: str,
+        start: int,
+        end: int,
+        message: str,
+        *,
+        allow_partial_overlap: bool = False,
+    ) -> None:
         span = (start, end)
-        if _overlaps(span, ignored_spans) or _overlaps(span, matched_spans):
+        if _is_contained_in(span, ignored_spans):
+            return
+        if allow_partial_overlap:
+            if _is_contained_in(span, matched_spans):
+                return
+        elif _overlaps(span, matched_spans):
             return
         matches.append(_InternalMatch(rule=rule, start=start, end=end, message=message))
         matched_spans.append(span)
@@ -137,7 +173,7 @@ def _collect_matches(
     # 1. Canary tokens (EVALCANARY_*).
     for token, start, end in find_canaries(text, case_insensitive=(mode is ScanMode.OUTPUT)):
         span = (start, end)
-        if _overlaps(span, ignored_spans):
+        if _is_contained_in(span, ignored_spans):
             continue
         if mode is ScanMode.OUTPUT:
             add_match(
@@ -146,6 +182,7 @@ def _collect_matches(
                 end,
                 "Canary token leaked in subject output",
             )
+            canary_leak_spans.append(span)
         elif registry.is_registered(token):
             ignored_spans.append(span)
         else:
@@ -159,7 +196,13 @@ def _collect_matches(
     # 2. Known key format rules.
     for rule in KNOWN_KEY_RULES:
         for match in rule.pattern.finditer(text):
-            add_match(rule.name, match.start(), match.end(), rule.description)
+            add_match(
+                rule.name,
+                match.start(),
+                match.end(),
+                rule.description,
+                allow_partial_overlap=bool(canary_leak_spans),
+            )
 
     # 3. Deny list of environment variable assignments.
     for match in ENV_VAR_ASSIGNMENT_PATTERN.finditer(text):
@@ -205,10 +248,58 @@ def _collect_matches(
         if len(token) < HIGH_ENTROPY_MIN_LENGTH:
             continue
         if (
-            _overlaps(span, ignored_spans)
-            or _overlaps(span, matched_spans)
+            _is_contained_in(span, ignored_spans)
+            or _is_contained_in(span, matched_spans)
             or _overlaps(span, url_spans)
         ):
+            continue
+        if _overlaps(span, matched_spans):
+            if not _overlaps(span, canary_leak_spans):
+                continue
+            for r_start, r_end in _subtract_spans(span, canary_leak_spans):
+                rem = text[r_start:r_end]
+                lead = len(rem) - len(rem.lstrip("_-"))
+                stripped_rem = rem.strip("_-")
+                matched_rem_key = False
+                if stripped_rem:
+                    for rule in KNOWN_KEY_RULES:
+                        for key_match in rule.pattern.finditer(stripped_rem):
+                            add_match(
+                                rule.name,
+                                r_start + lead + key_match.start(),
+                                r_start + lead + key_match.end(),
+                                rule.description,
+                            )
+                            matched_rem_key = True
+                if not matched_rem_key and rem.startswith("-"):
+                    for prefix_len in (2, 3, 4):
+                        if r_start - prefix_len < span[0]:
+                            continue
+                        candidate = text[r_start - prefix_len : r_end]
+                        for rule in KNOWN_KEY_RULES:
+                            for key_match in rule.pattern.finditer(candidate):
+                                add_match(
+                                    rule.name,
+                                    r_start - prefix_len + key_match.start(),
+                                    r_start - prefix_len + key_match.end(),
+                                    rule.description,
+                                    allow_partial_overlap=True,
+                                )
+                                matched_rem_key = True
+                        if matched_rem_key:
+                            break
+                if (
+                    not matched_rem_key
+                    and len(rem) >= HIGH_ENTROPY_MIN_LENGTH
+                    and not looks_like_file_path(rem)
+                    and shannon_entropy(rem) > HIGH_ENTROPY_THRESHOLD
+                ):
+                    add_match(
+                        "high_entropy_token",
+                        r_start,
+                        r_end,
+                        "High-entropy token detected (entropy > 4.0, length >= 24)",
+                    )
             continue
         if looks_like_file_path(token):
             continue
@@ -270,9 +361,6 @@ def redact_text(
     chunks: list[str] = []
     cursor = 0
     for item in matches:
-        chunks.append(text[cursor : item.start])
-        chunks.append(f"[REDACTED:{item.rule}]")
-        cursor = item.end
         line, col = _offset_to_line_col(item.start, starts)
         findings.append(
             RedactionFinding(
@@ -283,6 +371,13 @@ def redact_text(
                 message=item.message,
             )
         )
+        if item.start >= cursor:
+            chunks.append(text[cursor : item.start])
+            chunks.append(f"[REDACTED:{item.rule}]")
+            cursor = item.end
+        elif item.end > cursor:
+            chunks.append(f"[REDACTED:{item.rule}]")
+            cursor = item.end
     chunks.append(text[cursor:])
     return RedactionResult(redacted_text="".join(chunks), findings=tuple(findings))
 

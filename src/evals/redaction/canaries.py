@@ -16,8 +16,8 @@ from pathlib import Path
 import yaml
 
 CANARY_PREFIX = "EVALCANARY_"
-CANARY_PATTERN = re.compile(r"EVALCANARY_[A-Za-z0-9_]{4,}")
-CANARY_OUTPUT_PATTERN = re.compile(r"EVALCANARY_[A-Za-z0-9_]{4,}", re.IGNORECASE)
+CANARY_PATTERN = re.compile(r"(?<![A-Za-z0-9_])EVALCANARY_[A-Za-z0-9_]{4,}(?![A-Za-z0-9_])")
+CANARY_OUTPUT_PATTERN = re.compile(r"EVALCANARY_[A-Za-z0-9_]{4,}", re.IGNORECASE | re.ASCII)
 
 DEFAULT_CANARIES: frozenset[str] = frozenset(
     {
