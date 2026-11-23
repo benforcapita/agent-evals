@@ -1,0 +1,13 @@
+{
+  "fixture_id": "EXAMPLE-CLEAN-01",
+  "description": "Synthetic clean fixture using standard placeholders only.",
+  "env": {
+    "NOTION_TOKEN": "{{SECRET:NOTION_TOKEN}}",
+    "LINEAR_API_KEY": "{{SECRET:LINEAR_API_KEY}}"
+  },
+  "contact": {
+    "email": "{{EMAIL:primary-contact}}",
+    "phone": "{{PHONE:support-desk}}",
+    "website": "{{URL:company-home}}"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "fixture_id": "EXAMPLE-PLANTED-KEY-01",
+  "description": "Synthetic planted fake key fixture used to verify `evals validate` exits non-zero without printing the value.",
+  "planted_fake_token": "lin_api_FAKE000000000000000000000000000000"
+}

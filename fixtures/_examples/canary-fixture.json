@@ -1,0 +1,8 @@
+{
+  "fixture_id": "EXAMPLE-CANARY-01",
+  "description": "Synthetic fixture carrying a registered EVALCANARY_ token (allowed in fixtures, forbidden in output).",
+  "internal_note": "Confidential reference token: EVALCANARY_EXAMPLE_TOKEN_01",
+  "contact": {
+    "email": "{{EMAIL:owner}}"
+  }
+}

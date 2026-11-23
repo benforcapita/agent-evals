@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "requirements.lock"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install --no-deps -e .
+
+      - name: Lint with ruff
+        run: ruff check src tests
+
+      - name: Run unit and validate tests
+        run: pytest
+
+      - name: Smoke check evals validate CLI on example fixtures
+        run: |
+          evals validate --fixture fixtures/_examples/clean-fixture.json
+          evals validate --fixture fixtures/_examples/canary-fixture.json
+          set +e
+          evals validate --fixture fixtures/_examples/planted-key-fixture.json
+          planted_rc=$?
+          evals validate --output fixtures/_examples/canary-output.txt
+          canary_rc=$?
+          set -e
+          test "$planted_rc" -eq 3
+          test "$canary_rc" -eq 3
